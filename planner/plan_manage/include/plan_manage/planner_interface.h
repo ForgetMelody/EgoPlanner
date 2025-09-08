@@ -17,6 +17,7 @@
 #include <chrono>
 
 
+// 规划器接口类
 namespace  ego_planner
 {
     struct PathPoint
@@ -35,7 +36,7 @@ namespace  ego_planner
 
     class PlannerInterface
     {
-           
+
             EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
             bool reboundReplan(Eigen::Vector3d start_pt, Eigen::Vector3d start_vel,
@@ -61,7 +62,7 @@ namespace  ego_planner
 
         private:
 
-           
+
             std::vector<PathPoint> _global_plan_traj_;
             std::vector<PathPoint> _plan_traj_results_;
 
@@ -81,10 +82,10 @@ namespace  ego_planner
 
             void makePlan();
 
-            void getLocalPlanTrajResults(std::vector<PathPoint> &plan_traj_results);  
+            void getLocalPlanTrajResults(std::vector<PathPoint> &plan_traj_results);
 
             void getTraj();
-        
+
     };
 
 

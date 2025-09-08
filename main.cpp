@@ -6,7 +6,6 @@
 #include <iostream> 
 #include <string>    
 #include <ios>     
-
 #include "planner_interface.h"
 #include "./planner/matplotlib-cpp/matplotlibcpp.h"
 

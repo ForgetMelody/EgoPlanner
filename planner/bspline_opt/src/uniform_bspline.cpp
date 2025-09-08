@@ -3,48 +3,56 @@
 
 namespace ego_planner
 {
-
+  //构造函数 参考点 阶数 点之间的间隔
   UniformBspline::UniformBspline(const Eigen::MatrixXd &points, const int &order,
                                  const double &interval)
   {
+    // 设置为均匀B样条
     setUniformBspline(points, order, interval);
   }
 
   UniformBspline::~UniformBspline() {}
 
+  // 设置均匀b样条
   void UniformBspline::setUniformBspline(const Eigen::MatrixXd &points, const int &order,
                                          const double &interval)
   {
-    control_points_ = points;
-    p_ = order;
+    control_points_ = points; // 每行代表一个控制点 n列共n个点
+    p_ = order; // 阶数
     interval_ = interval;
 
+    // 控制点的数量
     n_ = points.cols() - 1;
+    // 结点数量
     m_ = n_ + p_ + 1;
 
+    // 计算结点向量(时间)
     u_ = Eigen::VectorXd::Zero(m_ + 1);
     for (int i = 0; i <= m_; ++i)
     {
-
-      if (i <= p_)
+      if (i <= p_) // 前p个结点
       {
-        u_(i) = double(-p_ + i) * interval_;
+        u_(i) = double(-p_ + i) * interval_; // p = 3，interval = 0.1 时 -0.3, -0.2, -0.1......
       }
-      else if (i > p_ && i <= m_ - p_)
+      else if (i > p_ && i <= m_ - p_) // 中间结点 均匀间隔
       {
         u_(i) = u_(i - 1) + interval_;
       }
-      else if (i > m_ - p_)
+      else if (i > m_ - p_) // 后p个结点 均匀间隔
       {
         u_(i) = u_(i - 1) + interval_;
       }
     }
+
   }
 
+  // 设置结点向量
   void UniformBspline::setKnot(const Eigen::VectorXd &knot) { this->u_ = knot; }
 
+  // 获取结点向量
   Eigen::VectorXd UniformBspline::getKnot() { return this->u_; }
 
+  // 获取俩个结点的时间间隔
   bool UniformBspline::getTimeSpan(double &um, double &um_p)
   {
     if (p_ > u_.rows() || m_ - p_ > u_.rows())
@@ -56,14 +64,16 @@ namespace ego_planner
     return true;
   }
 
+  // 获取所有控制点
   Eigen::MatrixXd UniformBspline::getControlPoint() { return control_points_; }
 
+  // 计算时间为u时的点的位置
   Eigen::VectorXd UniformBspline::evaluateDeBoor(const double &u)
   {
-
+    // 限制ub在[u_(p_),u_(m_-p_)]之间 即曲线实际的起点和终点
     double ub = min(max(u_(p_), u), u_(m_ - p_));
 
-    // determine which [ui,ui+1] lay in
+    // 查看落在哪个区间 - > ub 落在 u_(k) ~ u_(k+1)之间
     int k = p_;
     while (true)
     {
@@ -73,23 +83,26 @@ namespace ego_planner
     }
 
     /* deBoor's alg */
-    vector<Eigen::VectorXd> d;
+    vector<Eigen::VectorXd> d; // 取出相关的 k-p 到 k 的控制点放入d,长度为p_;
     for (int i = 0; i <= p_; ++i)
     {
       d.push_back(control_points_.col(k - p_ + i));
       // cout << d[i].transpose() << endl;
     }
 
-    for (int r = 1; r <= p_; ++r)
+    // 从后往前根据时间插值计算偏移时间的点
+    for (int r = 1; r <= p_; ++r) // 1 - p_次递推
     {
-      for (int i = p_; i >= r; --i)
+      for (int i = p_; i >= r; --i) //p_ - r 倒序
       {
+        // 计算插值权重
         double alpha = (ub - u_[i + k - p_]) / (u_[i + 1 + k - r] - u_[i + k - p_]);
-        // cout << "alpha: " << alpha << endl;
+        // 从后往前计算
         d[i] = (1 - alpha) * d[i - 1] + alpha * d[i];
       }
     }
 
+    // 第p_个点就是d的最后一个点，也是需要计算的t = ub_的点
     return d[p_];
   }
 
@@ -97,13 +110,14 @@ namespace ego_planner
   //   return evaluateDeBoor(t + u_(p_));
   // }
 
+  // 计算导数控制点 （仍为B样条曲线，阶数-1）
   Eigen::MatrixXd UniformBspline::getDerivativeControlPoints()
   {
-    // The derivative of a b-spline is also a b-spline, its order become p_-1
     // control point Qi = p_*(Pi+1-Pi)/(ui+p_+1-ui+1)
     Eigen::MatrixXd ctp(control_points_.rows(), control_points_.cols() - 1);
     for (int i = 0; i < ctp.cols(); ++i)
     {
+      // 新点i = (旧点i+1 - 旧点i) / (ui+p_+1 - ui+1)
       ctp.col(i) =
           p_ * (control_points_.col(i + 1) - control_points_.col(i)) / (u_(i + p_ + 1) - u_(i + 1));
     }
