@@ -150,7 +150,7 @@ namespace ego_planner
     feasibility_tolerance_ = tolerance;
   }
 
-  // 检查可行性
+  // 检查速度和加速度约束可行性
   bool UniformBspline::checkFeasibility(double &ratio, bool show)
   {
     bool fea = true;

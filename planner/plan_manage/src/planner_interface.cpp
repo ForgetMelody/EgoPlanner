@@ -13,6 +13,7 @@ namespace ego_planner
 
     }
 
+    // 传参初始化速度限制
     void PlannerInterface::initParam(double max_vel,double max_acc,double max_jerk)
     {
         pp_.max_vel_ = max_vel;
@@ -23,6 +24,7 @@ namespace ego_planner
         pp_.planning_horizen_ = 5.0;
     }
     
+    // 初始化ESDF地图
     void PlannerInterface::initEsdfMap(double x_size,double y_size,double z_size,double resolution, Eigen::Vector3d origin,double inflate_values)
     {
         std::cout << "x_size =" << x_size << " y_size =" << y_size << " z_size" << z_size << std::endl;
@@ -40,12 +42,14 @@ namespace ego_planner
        
     }
 
+    // 设置路径点
     void PlannerInterface::setPathPoint(std::vector<PathPoint> &plan_traj)
     {
         _global_plan_traj_.clear();
         _global_plan_traj_ = plan_traj;
     }
     
+    // 设置障碍物
     void PlannerInterface::setObstacles(std::vector<ObstacleInfo> &obstacle)
     {
         for(int i = 0; i < obstacle.size();i++)
@@ -55,14 +59,11 @@ namespace ego_planner
             obstacle_pos[1] = obstacle[i].y;
             obstacle_pos[2] = 0.2;
             grid_map_->addLaserPoints(obstacle_pos, 1);
-
         }
-
         grid_map_->startUpdateMapInfo();
-       
-
     }
 
+    // 开始规划
     void PlannerInterface::makePlan()
     {
     
@@ -78,10 +79,11 @@ namespace ego_planner
 
         for(int i = 0; i< _global_plan_traj_.size();i++)
         {
-            Eigen::Vector3d plan_pt(_global_plan_traj_[i].x,_global_plan_traj_[i].y,0.2);
+            Eigen::Vector3d plan_pt(_global_plan_traj_[i].x,_global_plan_traj_[i].y,0.2);// 
             point_set.push_back(plan_pt);
         }
 
+        //约束调整
         start_pt[0] = _global_plan_traj_[0].x;
         start_pt[1] = _global_plan_traj_[0].y;
         start_pt[2] = 0.0;
@@ -105,9 +107,10 @@ namespace ego_planner
 
         auto start = std::chrono::system_clock::now();
 
+        // 调用reboundReplan进行路径规划
         bool plan_success = reboundReplan(start_pt,start_vel, start_acc,local_target_pt,local_target_vel, point_set);
         if (plan_success)
-           getTraj();
+           getTraj(); // 规划成功 获取轨迹
 
 
         auto end = std::chrono::system_clock::now();
@@ -116,6 +119,7 @@ namespace ego_planner
         printf("MotionPlanner Total Running Time: %d  ms \n", elapsed.count());
     }
 
+    //获取规划结果
     void PlannerInterface::getLocalPlanTrajResults(std::vector<PathPoint> &plan_traj_results)
     {
         plan_traj_results = _plan_traj_results_;
@@ -127,21 +131,27 @@ namespace ego_planner
                                         Eigen::Vector3d local_target_vel,vector<Eigen::Vector3d> point_set)
     {
         vector<Eigen::Vector3d> start_end_derivatives;
-        double ts = (start_pt - local_target_pt).norm() > 0.1 ? pp_.ctrl_pt_dist / pp_.max_vel_ * 1.2 : pp_.ctrl_pt_dist / pp_.max_vel_ * 5; // pp_.ctrl_pt_dist / pp_.max_vel_ is too tense, and will surely exceed the acc/vel limits
+        // 计算时间步长,根据距离选择不同的系数
+        double ts = (start_pt - local_target_pt).norm() > 0.1 ? pp_.ctrl_pt_dist / pp_.max_vel_ * 1.2 : pp_.ctrl_pt_dist / pp_.max_vel_ * 5; 
+        // pp_.ctrl_pt_dist / pp_.max_vel_ is too tense, and will surely exceed the acc/vel limits
+
+        // 构造起点和终点加速度限制提供给优化器
         start_end_derivatives.push_back(start_vel);
         start_end_derivatives.push_back(local_target_vel);
         start_end_derivatives.push_back(start_acc);
         start_end_derivatives.push_back(start_acc);
 
+        // 构造参数化的B样条曲线控制点
         Eigen::MatrixXd ctrl_pts;
         UniformBspline::parameterizeToBspline(ts, point_set, start_end_derivatives, ctrl_pts);
 
+        // 给优化器提供控制点
         vector<vector<Eigen::Vector3d>> a_star_pathes;
         a_star_pathes = bspline_optimizer_rebound_->initControlPoints(ctrl_pts, true);
 
         static int vis_id = 0;
         
-        /*** STEP 2: OPTIMIZE ***/
+        // 优化
         bool flag_step_1_success = bspline_optimizer_rebound_->BsplineOptimizeTrajRebound(ctrl_pts, ts);
         cout << "first_optimize_step_success=" << flag_step_1_success << endl;
         if (!flag_step_1_success)
@@ -151,15 +161,22 @@ namespace ego_planner
         }
 
         /*** STEP 3: REFINE(RE-ALLOCATE TIME) IF NECESSARY ***/
+        // 在必要时进行细优化 (检查物理约束等)
+
+        // 初始化b样条曲线
         UniformBspline pos = UniformBspline(ctrl_pts, 3, ts);
+        // 设置物理约束
         pos.setPhysicalLimits(pp_.max_vel_, pp_.max_acc_, pp_.feasibility_tolerance_);
 
         double ratio;
         bool flag_step_2_success = true;
+
+        //检查速度和加速度约束可行
         if (!pos.checkFeasibility(ratio, false))
         {
             cout << "Need to reallocate time." << endl;
 
+            // 细优化 (重新分配时间)
             Eigen::MatrixXd optimal_control_points;
             flag_step_2_success = refineTrajAlgo(pos, start_end_derivatives, ratio, ts, optimal_control_points);
             if (flag_step_2_success)
@@ -173,13 +190,16 @@ namespace ego_planner
             return false;
         }
     
+        //更新轨迹信息
         updateTrajInfo(pos);
 
+        //重制失败计数器
         continous_failures_count_ = 0;
 
         return true;
     }
 
+    // 重新分配时间以满足物理约束
     bool PlannerInterface::refineTrajAlgo(UniformBspline &traj, vector<Eigen::Vector3d> &start_end_derivative, double ratio, double &ts, Eigen::MatrixXd &optimal_control_points)
     {
         double t_inc;
@@ -202,6 +222,7 @@ namespace ego_planner
         return success;
     }
 
+    // 更新轨迹信息
     void PlannerInterface::updateTrajInfo(const UniformBspline &position_traj)
     {
         local_data_.position_traj_ = position_traj;
@@ -212,26 +233,28 @@ namespace ego_planner
         local_data_.traj_id_ += 1;
     }
 
+    // 重新规划曲线时间和速度
     void PlannerInterface::reparamBspline(UniformBspline &bspline, vector<Eigen::Vector3d> &start_end_derivative, double ratio,
                                             Eigen::MatrixXd &ctrl_pts, double &dt, double &time_inc)
     {
-        double time_origin = bspline.getTimeSum();
-        int seg_num = bspline.getControlPoint().cols() - 3;
+        double time_origin = bspline.getTimeSum(); // 原曲线的总耗时
+        int seg_num = bspline.getControlPoint().cols() - 3; //knot点数量 (-4 + 1)
 
-        bspline.lengthenTime(ratio);
-        double duration = bspline.getTimeSum();
-        dt = duration / double(seg_num);
-        time_inc = duration - time_origin;
+        bspline.lengthenTime(ratio); //调整时间
+        double duration = bspline.getTimeSum(); // 调整后的曲线总耗时
+        dt = duration / double(seg_num); // 调整后的时间步长
+        time_inc = duration - time_origin; // 调整后的时间增量
 
-        vector<Eigen::Vector3d> point_set;
+        vector<Eigen::Vector3d> point_set; //构造调整后的控制点集
         for (double time = 0.0; time <= duration + 1e-4; time += dt)
         {
             point_set.push_back(bspline.evaluateDeBoorT(time));
         }
-
+        // 重新参数化以保证约束满足
         UniformBspline::parameterizeToBspline(dt, point_set, start_end_derivative, ctrl_pts);
     }
 
+    // 获取轨迹
     void PlannerInterface::getTraj()
     {
         auto info = &local_data_;
@@ -263,17 +286,18 @@ namespace ego_planner
         vector<ego_planner::UniformBspline> traj_;
         double traj_duration_;
 
+        // 复制一份按照0.1s时间步长的轨迹
         ego_planner::UniformBspline pos_traj(pos_pts, bspline.order, 0.1);
         pos_traj.setKnot(knots);
         traj_.clear();
-        traj_.push_back(pos_traj);
-        traj_.push_back(traj_[0].getDerivative());
-        traj_.push_back(traj_[1].getDerivative());
+        traj_.push_back(pos_traj); //位置轨迹
+        traj_.push_back(traj_[0].getDerivative()); // 速度轨迹
+        traj_.push_back(traj_[1].getDerivative()); // 加速度轨迹
         traj_duration_ = traj_[0].getTimeSum();
-
 
         Eigen::Vector3d pos(Eigen::Vector3d::Zero()), vel(Eigen::Vector3d::Zero()), acc(Eigen::Vector3d::Zero()), pos_f;
         _plan_traj_results_.clear();
+        // 计算时间间隔的轨迹（位置 速度 加速度）
         for (double t_cur = 0; t_cur <= traj_duration_; t_cur += 0.1) 
         {
             pos = traj_[0].evaluateDeBoorT(t_cur);
@@ -282,7 +306,7 @@ namespace ego_planner
             PathPoint tempPath;
             tempPath.x = pos(0);
             tempPath.y = pos(1);
-            _plan_traj_results_.push_back(tempPath);
+            _plan_traj_results_.push_back(tempPath); // 保存轨迹点
         }
     }
 

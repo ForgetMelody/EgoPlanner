@@ -63,8 +63,8 @@ namespace  ego_planner
         private:
 
 
-            std::vector<PathPoint> _global_plan_traj_;
-            std::vector<PathPoint> _plan_traj_results_;
+            std::vector<PathPoint> _global_plan_traj_; // 传入的路标点
+            std::vector<PathPoint> _plan_traj_results_; // 规划结果
 
 
         public:
