@@ -26,7 +26,7 @@ namespace ego_planner
     // 结点数量
     m_ = n_ + p_ + 1;
 
-    // 计算结点向量(时间)
+    // 计算u_向量(时间点)
     u_ = Eigen::VectorXd::Zero(m_ + 1);
     for (int i = 0; i <= m_; ++i)
     {
@@ -34,11 +34,12 @@ namespace ego_planner
       {
         u_(i) = double(-p_ + i) * interval_; // p = 3，interval = 0.1 时 -0.3, -0.2, -0.1......
       }
-      else if (i > p_ && i <= m_ - p_) // 中间结点 均匀间隔
+      // 中间结点 和 后p个结点 均匀间隔
+      else if (i > p_ && i <= m_ - p_) 
       {
         u_(i) = u_(i - 1) + interval_;
       }
-      else if (i > m_ - p_) // 后p个结点 均匀间隔
+      else if (i > m_ - p_) // 均匀间隔
       {
         u_(i) = u_(i - 1) + interval_;
       }
@@ -52,7 +53,7 @@ namespace ego_planner
   // 获取结点向量
   Eigen::VectorXd UniformBspline::getKnot() { return this->u_; }
 
-  // 获取俩个结点的时间间隔
+  // 获取曲线的时间区间
   bool UniformBspline::getTimeSpan(double &um, double &um_p)
   {
     if (p_ > u_.rows() || m_ - p_ > u_.rows())
@@ -91,26 +92,26 @@ namespace ego_planner
     }
 
     // 从后往前根据时间插值计算偏移时间的点
-    for (int r = 1; r <= p_; ++r) // 1 - p_次递推
+    for (int r = 1; r <= p_; ++r) // 从1阶曲线往上递推 
     {
-      for (int i = p_; i >= r; --i) //p_ - r 倒序
+      for (int i = p_; i >= r; --i) //从后往前计算(p介曲线涉及p个控制点 即 k-r 到 k，随着阶数增加 要算的点逐步减少) 
       {
-        // 计算插值权重
+        // p = 3
+        // r = 1: p_-1, p_-2, p_-3
+        // r = 2: p_-1, p_-2
+        // r = 3: p_-1
+        // 计算插值权重 i + k - p_ 即为k前的第(p_ - i)个控制点，为当前区间的左端点
+        // 计算插值权重 i + 1 + k - r 即为k后面的第(r - i)个控制点，为当前区间的右端点
         double alpha = (ub - u_[i + k - p_]) / (u_[i + 1 + k - r] - u_[i + k - p_]);
         // 从后往前计算
         d[i] = (1 - alpha) * d[i - 1] + alpha * d[i];
       }
     }
-
     // 第p_个点就是d的最后一个点，也是需要计算的t = ub_的点
     return d[p_];
   }
 
-  // Eigen::VectorXd UniformBspline::evaluateDeBoorT(const double& t) {
-  //   return evaluateDeBoor(t + u_(p_));
-  // }
-
-  // 计算导数控制点 （仍为B样条曲线，阶数-1）
+  // 计算导数控制点 （仍为B样条曲线，阶数-1）（可用于计算速度
   Eigen::MatrixXd UniformBspline::getDerivativeControlPoints()
   {
     // control point Qi = p_*(Pi+1-Pi)/(ui+p_+1-ui+1)
@@ -124,12 +125,13 @@ namespace ego_planner
     return ctp;
   }
 
+  // 计算导数B样条曲线
   UniformBspline UniformBspline::getDerivative()
   {
     Eigen::MatrixXd ctp = getDerivativeControlPoints();
-    UniformBspline derivative(ctp, p_ - 1, interval_);
+    UniformBspline derivative(ctp, p_ - 1, interval_); // 初始化一个p_1阶的B样条曲线,使用导数控制点
 
-    /* cut the first and last knot */
+    // 1 ～ u_ -1 去头去尾  因为头尾阶数个点没有实际作用，用于重合端点
     Eigen::VectorXd knot(u_.rows() - 2);
     knot = u_.segment(1, u_.rows() - 2);
     derivative.setKnot(knot);
@@ -139,6 +141,7 @@ namespace ego_planner
 
   double UniformBspline::getInterval() { return interval_; }
 
+  // 设置物理限制
   void UniformBspline::setPhysicalLimits(const double &vel, const double &acc, const double &tolerance)
   {
     limit_vel_ = vel;
@@ -147,18 +150,21 @@ namespace ego_planner
     feasibility_tolerance_ = tolerance;
   }
 
+  // 检查可行性
   bool UniformBspline::checkFeasibility(double &ratio, bool show)
   {
     bool fea = true;
 
     Eigen::MatrixXd P = control_points_;
-    int dimension = control_points_.rows();
+    int dimension = control_points_.rows(); //1列为一个点,1行则为一个维度
 
     /* check vel feasibility and insert points */
+    // 速度检查
     double max_vel = -1.0;
-    double enlarged_vel_lim = limit_vel_ * (1.0 + feasibility_tolerance_) + 1e-4;
+    double enlarged_vel_lim = limit_vel_ * (1.0 + feasibility_tolerance_) + 1e-4; //计算容差后的最大速度
     for (int i = 0; i < P.cols() - 1; ++i)
     {
+      // 相邻点做差除时间间隔 计算这一段的平均速度
       Eigen::VectorXd vel = p_ * (P.col(i + 1) - P.col(i)) / (u_(i + p_ + 1) - u_(i + 1));
 
       if (fabs(vel(0)) > enlarged_vel_lim || fabs(vel(1)) > enlarged_vel_lim ||
@@ -171,12 +177,13 @@ namespace ego_planner
 
         for (int j = 0; j < dimension; ++j)
         {
-          max_vel = max(max_vel, fabs(vel(j)));
+          max_vel = max(max_vel, fabs(vel(j))); //记录最大的速度分量
         }
       }
     }
 
     /* acc feasibility */
+    // 加速度检查
     double max_acc = -1.0;
     double enlarged_acc_lim = limit_acc_ * (1.0 + feasibility_tolerance_) + 1e-4;
     for (int i = 0; i < P.cols() - 2; ++i)
@@ -185,7 +192,7 @@ namespace ego_planner
       Eigen::VectorXd acc = p_ * (p_ - 1) *
                             ((P.col(i + 2) - P.col(i + 1)) / (u_(i + p_ + 2) - u_(i + 2)) -
                              (P.col(i + 1) - P.col(i)) / (u_(i + p_ + 1) - u_(i + 1))) /
-                            (u_(i + p_ + 1) - u_(i + 2));
+                            (u_(i + p_ + 1) - u_(i + 2)); // 算出相邻2段段速度再算家速度
 
       if (fabs(acc(0)) > enlarged_acc_lim || fabs(acc(1)) > enlarged_acc_lim ||
           fabs(acc(2)) > enlarged_acc_lim)
@@ -197,31 +204,38 @@ namespace ego_planner
 
         for (int j = 0; j < dimension; ++j)
         {
-          max_acc = max(max_acc, fabs(acc(j)));
+          max_acc = max(max_acc, fabs(acc(j))); // 记录最大的加速度分量
         }
       }
     }
 
-    ratio = max(max_vel / limit_vel_, sqrt(fabs(max_acc) / limit_acc_));
+    ratio = max(max_vel / limit_vel_, sqrt(fabs(max_acc) / limit_acc_)); // 计算时间调整比例
 
     return fea;
   }
 
+  // 根据比例调整时间
   void UniformBspline::lengthenTime(const double &ratio)
   {
+    // 默认阶数为5
     int num1 = 5;
     int num2 = getKnot().rows() - 1 - 5;
 
-    double delta_t = (ratio - 1.0) * (u_(num2) - u_(num1));
-    double t_inc = delta_t / double(num2 - num1);
-    for (int i = num1 + 1; i <= num2; ++i)
+    double delta_t = (ratio - 1.0) * (u_(num2) - u_(num1)); // 计算时间增量
+    double t_inc = delta_t / double(num2 - num1); // 计算每一步的增量
+    for (int i = num1 + 1; i <= num2; ++i) //从正式的第二个结点开始
       u_(i) += double(i - num1) * t_inc;
-    for (int i = num2 + 1; i < u_.rows(); ++i)
+    for (int i = num2 + 1; i < u_.rows(); ++i) //调整结束时间(统一最后几个结点)
       u_(i) += delta_t;
   }
 
   // void UniformBspline::recomputeInit() {}
 
+  // 将一系列路径点参数化为b样条曲线的控制点，同时满足起点和终点的速度约束
+  // ts 速度间隔
+  // point_set 路径点集
+  // start_end_derivative 起点和终点的速度约束
+  // ctrl_pts 输出控制点
   void UniformBspline::parameterizeToBspline(const double &ts, const vector<Eigen::Vector3d> &point_set,
                                              const vector<Eigen::Vector3d> &start_end_derivative,
                                              Eigen::MatrixXd &ctrl_pts)
@@ -232,34 +246,49 @@ namespace ego_planner
       return;
     }
 
+    // 起点 终点 中间点>=1
     if (point_set.size() <= 3)
     {
       cout << "[B-spline]:point set have only " << point_set.size() << " points." << endl;
       return;
     }
 
+    //start_end_derivative 必须为4个 （起点速度，起点加速度，终点速度，终点加速度）
     if (start_end_derivative.size() != 4)
     {
       cout << "[B-spline]:derivatives error." << endl;
     }
 
-    int K = point_set.size();
+    int K = point_set.size(); // 输入路径点数目
 
     // write A
+    // 位置 速度 加速度的约束系数
+    /*
+    与前后相邻点的系数
+    prow C(u) = (1P_{i-1} + 4P_i + 1P_{i+1})/6
+    vrow C'(u) = (-1P_{i-1} + 0P_i + 1P_{i+1})/(2Δt)
+    arow C''(u) = (1P_{i-1} - 2P_i + 1P_{i+1})/Δt²
+    */
+    // 此处由3阶b样条曲线的性质决定
     Eigen::Vector3d prow(3), vrow(3), arow(3);
     prow << 1, 4, 1;
     vrow << -1, 0, 1;
     arow << 1, -2, 1;
 
+    // 
     Eigen::MatrixXd A = Eigen::MatrixXd::Zero(K + 4, K + 2);
 
+    //约束类型     位置       系数向量  缩放因子    作用
+    //位置        主对角线    prow    1/6       确保曲线通过路径点 
     for (int i = 0; i < K; ++i)
       A.block(i, i, 1, 3) = (1 / 6.0) * prow.transpose();
-
+    //起点速度    第K行开头     vrow    1/(2ts)   设置起点速度
     A.block(K, 0, 1, 3) = (1 / 2.0 / ts) * vrow.transpose();
+    //终点速度    第K+1行末尾   vrow    1/(2ts)   设置终点速度 
     A.block(K + 1, K - 1, 1, 3) = (1 / 2.0 / ts) * vrow.transpose();
-
+    //起点加速度  第K+2行开头   arow    1/ts²     设置起点加速度 
     A.block(K + 2, 0, 1, 3) = (1 / ts / ts) * arow.transpose();
+    //终点加速度  第K+3列末尾   arow    1/ts²     设置终点加速度
     A.block(K + 3, K - 1, 1, 3) = (1 / ts / ts) * arow.transpose();
 
     //cout << "A" << endl << A << endl << endl;
@@ -273,6 +302,7 @@ namespace ego_planner
       bz(i) = point_set[i](2);
     }
 
+    // 起点速度 终点速度 起点加速度 终点加速度
     for (int i = 0; i < 4; ++i)
     {
       bx(K + i) = start_end_derivative[i](0);
@@ -294,6 +324,7 @@ namespace ego_planner
     // cout << "[B-spline]: parameterization ok." << endl;
   }
 
+  // 计算路径的总时间
   double UniformBspline::getTimeSum()
   {
     double tm, tmp;
@@ -303,6 +334,7 @@ namespace ego_planner
       return -1.0;
   }
 
+  // 路径长度
   double UniformBspline::getLength(const double &res)
   {
     double length = 0.0;
@@ -317,6 +349,7 @@ namespace ego_planner
     return length;
   }
 
+  // 求解加加速度
   double UniformBspline::getJerk()
   {
     UniformBspline jerk_traj = getDerivative().getDerivative().getDerivative();
@@ -337,6 +370,7 @@ namespace ego_planner
     return jerk;
   }
 
+  // 求平均速度和最大速度
   void UniformBspline::getMeanAndMaxVel(double &mean_v, double &max_v)
   {
     UniformBspline vel = getDerivative();
@@ -363,6 +397,7 @@ namespace ego_planner
     max_v = max_vel;
   }
 
+  // 求平均和最大加速度
   void UniformBspline::getMeanAndMaxAcc(double &mean_a, double &max_a)
   {
     UniformBspline acc = getDerivative().getDerivative();
