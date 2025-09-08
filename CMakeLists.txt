@@ -3,6 +3,14 @@ project(EgoPlanner)
 set(CMAKE_BUILD_TYPE "Release")
 ADD_COMPILE_OPTIONS(-std=c++11 )
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -g")
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+find_package(Eigen3 REQUIRED)
+find_package(PythonLibs REQUIRED)
+include_directories(
+    ${EIGEN3_INCLUDE_DIR}
+    ${PYTHON_INCLUDE_DIRS}
+)
 
 include_directories(./planner/bspline_opt/include)
 include_directories(./planner/path_searching/include)
@@ -22,7 +30,7 @@ target_link_libraries( EgoPlanCore
                        bspline_opt
                        path_searching
                        local_map
-                       python2.7 
+                       ${PYTHON_LIBRARIES}
                        ego_planner
 
 )
