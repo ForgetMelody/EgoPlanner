@@ -1,5 +1,6 @@
 #include "sdf_map.h"
 
+//重制缓存
 void SDFMap::resetBuffer(Eigen::Vector3d min_pos, Eigen::Vector3d max_pos)
 {
   min_pos(0) = max(min_pos(0), min_range(0));
@@ -25,6 +26,7 @@ void SDFMap::resetBuffer(Eigen::Vector3d min_pos, Eigen::Vector3d max_pos)
       }
 }
 
+//出界检查
 bool SDFMap::isInMap(Eigen::Vector3d pos)
 {
   if (pos(0) < min_range(0) || pos(1) < min_range(1) || pos(2) < min_range(2))
@@ -48,16 +50,17 @@ bool SDFMap::isInMap(Eigen::Vector3d pos)
   return true;
 }
 
+//坐标转换
 void SDFMap::posToIndex(Eigen::Vector3d pos, Eigen::Vector3i& id)
 {
   for (int i = 0; i < 3; ++i)
-    id(i) = floor((pos(i) - origin(i)) * resolution_inv);
+    id(i) = floor((pos(i) - origin(i)) * resolution_inv); // 向下取整
 }
 
 void SDFMap::indexToPos(Eigen::Vector3i id, Eigen::Vector3d& pos)
 {
   for (int i = 0; i < 3; ++i)
-    pos(i) = (id(i) + 0.5) * resolution + origin(i);
+    pos(i) = (id(i) + 0.5) * resolution + origin(i); // 加0.5保证坐标点在单元格中心
 }
 
 void SDFMap::setOccupancy(Eigen::Vector3d pos, double occ)
@@ -138,6 +141,7 @@ double SDFMap::getDistance(Eigen::Vector3i id, int sign)
   return distance_buffer_all[id(0) * grid_size(1) * grid_size(2) + id(1) * grid_size(2) + id(2)];
 }
 
+//使用3线性计算距离和梯度
 double SDFMap::getDistWithGradTrilinear(Eigen::Vector3d pos, Eigen::Vector3d& grad)
 {
   if (!isInMap(pos))
@@ -146,7 +150,7 @@ double SDFMap::getDistWithGradTrilinear(Eigen::Vector3d pos, Eigen::Vector3d& gr
     return 0;
   }
 
-  /* use trilinear interpolation */
+  // 计算当前点的八邻域坐标中（x,y,z）最小的那格
   Eigen::Vector3d pos_m = pos - 0.5 * resolution * Eigen::Vector3d::Ones();
 
   Eigen::Vector3i idx;
@@ -157,7 +161,7 @@ double SDFMap::getDistWithGradTrilinear(Eigen::Vector3d pos, Eigen::Vector3d& gr
 
   diff = (pos - idx_pos) * resolution_inv;
 
-  double values[2][2][2];
+  double values[2][2][2]; //存储相邻2*2*2格的距离值
   for (int x = 0; x < 2; x++)
   {
     for (int y = 0; y < 2; y++)
@@ -170,16 +174,21 @@ double SDFMap::getDistWithGradTrilinear(Eigen::Vector3d pos, Eigen::Vector3d& gr
     }
   }
 
+  // 根据点到各格的距离加权计算距离
+  //x方向
   double v00 = (1 - diff[0]) * values[0][0][0] + diff[0] * values[1][0][0];
   double v01 = (1 - diff[0]) * values[0][0][1] + diff[0] * values[1][0][1];
   double v10 = (1 - diff[0]) * values[0][1][0] + diff[0] * values[1][1][0];
   double v11 = (1 - diff[0]) * values[0][1][1] + diff[0] * values[1][1][1];
 
+  // y方向
   double v0 = (1 - diff[1]) * v00 + diff[1] * v10;
   double v1 = (1 - diff[1]) * v01 + diff[1] * v11;
 
+  // z方向
   double dist = (1 - diff[2]) * v0 + diff[2] * v1;
 
+  // 计算梯度
   grad[2] = (v1 - v0) * resolution_inv;
   grad[1] = ((1 - diff[2]) * (v10 - v00) + diff[2] * (v11 - v01)) * resolution_inv;
   grad[0] = (1 - diff[2]) * (1 - diff[1]) * (values[1][0][0] - values[0][0][0]);
@@ -192,6 +201,7 @@ double SDFMap::getDistWithGradTrilinear(Eigen::Vector3d pos, Eigen::Vector3d& gr
   return dist;
 }
 
+//处理单个维度的距离传播
 template <typename F_get_val, typename F_set_val>
 void SDFMap::fillESDF(F_get_val f_get_val, F_set_val f_set_val, int start, int end, int dim)
 {
@@ -235,6 +245,8 @@ void SDFMap::fillESDF(F_get_val f_get_val, F_set_val f_set_val, int start, int e
 void SDFMap::updateESDF3d()
 {
   /* ========== compute positive DT ========== */
+  // 计算正值距离场（障碍物外部）
+  //处理z轴 从膨胀缓存读取，放入tmp_buffer1
   for (int x = esdf_min_[0]; x <= esdf_max_[0]; x++)
   {
     for (int y = esdf_min_[1]; y <= esdf_max_[1]; y++)
@@ -251,7 +263,7 @@ void SDFMap::updateESDF3d()
           esdf_min_[2], esdf_max_[2], 2);
     }
   }
-
+  // 处理y轴 从tmp_buffer1读取，放入tmp_buffer2
   for (int x = esdf_min_[0]; x <= esdf_max_[0]; x++)
   {
     for (int z = esdf_min_[2]; z <= esdf_max_[2]; z++)
@@ -262,6 +274,7 @@ void SDFMap::updateESDF3d()
     }
   }
 
+  // 处理x轴 从tmp_buffer2读取，放入distance_buffer
   for (int y = esdf_min_[1]; y <= esdf_max_[1]; y++)
   {
     for (int z = esdf_min_[2]; z <= esdf_max_[2]; z++)
@@ -279,7 +292,7 @@ void SDFMap::updateESDF3d()
                esdf_min_[0], esdf_max_[0], 0);
     }
   }
-
+  //计算负向距离场(障碍物内部)
   /* ========== compute negative distance ========== */
   for (int x = esdf_min_(0); x <= esdf_max_(0); ++x)
     for (int y = esdf_min_(1); y <= esdf_max_(1); ++y)
@@ -343,6 +356,7 @@ void SDFMap::updateESDF3d()
     }
   }
 
+  //合并正负距离场
   /* ========== combine pos and neg DT ========== */
   for (int x = esdf_min_(0); x <= esdf_max_(0); ++x)
     for (int y = esdf_min_(1); y <= esdf_max_(1); ++y)
@@ -357,6 +371,7 @@ void SDFMap::updateESDF3d()
       }
 }
 
+//
 bool SDFMap::tryFillMinima(const Eigen::Vector3d& pt, Eigen::Vector3d& center, Eigen::Vector3d& cube_len)
 {
   vector<Eigen::Vector3d> peaks = findPeaks(pt);
@@ -444,6 +459,7 @@ bool SDFMap::fillLocalMinima(const vector<Eigen::Vector3d>& peaks, Eigen::Vector
   return true;
 }
 
+// 查找周围的峰值点
 vector<Eigen::Vector3d> SDFMap::findPeaks(const Eigen::Vector3d& pt)
 {
   vector<Eigen::Vector3d> peaks;
@@ -451,6 +467,7 @@ vector<Eigen::Vector3d> SDFMap::findPeaks(const Eigen::Vector3d& pt)
   Eigen::Vector3i idx;
   posToIndex(pt, idx);
 
+  //搜索半径
   const int radius = ceil(0.3 / resolution);
   const int radius_z = radius;
 
@@ -470,18 +487,24 @@ vector<Eigen::Vector3d> SDFMap::findPeaks(const Eigen::Vector3d& pt)
   return peaks;
 }
 
+// 检查是否为峰值点
 bool SDFMap::checkPeak(Eigen::Vector3d pos)
 {
   Eigen::Vector3d grad1, grad2, pos1, pos2;
   double grad_2nd;
-  const double thresh = 0.5 * resolution_inv;
+  const double thresh = 0.5 * resolution_inv; //阈值 0.5/分辨率
+
+
+  //分别从 x y z 三个轴开始检查
   /* ---------- check x axis ---------- */
   pos1 = pos2 = pos;
   pos1(0) = pos(0) - resolution;
   pos2(0) = pos(0) + resolution;
+  //计算对应位置的梯度
   getDistWithGradTrilinear(pos1, grad1);
   getDistWithGradTrilinear(pos2, grad2);
 
+  //计算二阶导数（梯度变化率）
   grad_2nd = (grad2(0) - grad1(0)) / (2.0 * resolution);
   if (grad_2nd > thresh)
   {
@@ -518,26 +541,27 @@ bool SDFMap::checkPeak(Eigen::Vector3d pos)
   return false;
 }
 
+//初始化
 void SDFMap::initMap(double x_size,double y_size,double z_size,double resolution_, Eigen::Vector3d org,double inflate_values)
 {
 
   /* ---------- get parameter ---------- */
 
-  inflate_val_ = inflate_values;//0.15;
+  inflate_val_ = inflate_values;//膨胀值
   
   ground_z_ = 1.0;
-  resolution = resolution_;
+  resolution = resolution_; //分辨率
 
   resolution_inv = 1 / resolution;
 
-  origin   = org;//Eigen::Vector3d(-y_size / 2.0, -y_size / 2.0, ground_z_);
-  map_size = Eigen::Vector3d(x_size, y_size, z_size);
+  origin   = org;//左下角坐标
+  map_size = Eigen::Vector3d(x_size, y_size, z_size);//地图尺寸
 
   
   /* ---------- init map ---------- */
 
   for (int i = 0; i < 3; ++i)
-    grid_size(i) = ceil(map_size(i) / resolution);
+    grid_size(i) = ceil(map_size(i) / resolution); // 三个轴的索引数量
   //cout << "grid num:" << grid_size.transpose() << endl;
   min_range = origin;
   max_range = origin + map_size;
@@ -545,6 +569,7 @@ void SDFMap::initMap(double x_size,double y_size,double z_size,double resolution
   last_fill_pt.setZero();
 
   // initialize size of buffer
+  //初始化缓存区
   occupancy_buffer.resize(grid_size(0) * grid_size(1) * grid_size(2));
   distance_buffer.resize(grid_size(0) * grid_size(1) * grid_size(2));
 
@@ -657,28 +682,10 @@ void SDFMap::raycastProcess()
   }
 }
 
+//记录需要膨胀的点坐标存储到pts中
 void SDFMap::inflatePoint(const Eigen::Vector3i& pt, int step, vector<Eigen::Vector3i>& pts)
 {
   int num = 0;
-
-  // for (int x = -step; x <= step; ++x)
-  // {
-  //   if (x == 0)
-  //     continue;
-  //   pts[num++] = Eigen::Vector3i(pt(0) + x, pt(1), pt(2));
-  // }
-  // for (int y = -step; y <= step; ++y)
-  // {
-  //   if (y == 0)
-  //     continue;
-  //   pts[num++] = Eigen::Vector3i(pt(0), pt(1) + y, pt(2));
-  // }
-
-  // for (int z = -1; z <= 1; ++z)
-  // {
-  //   pts[num++] = Eigen::Vector3i(pt(0), pt(1), pt(2) + z);
-  // }
-
    for (int x = -step; x <= step; ++x)
     for (int y = -step; y <= step; ++y)
       for (int z = -step; z <= step; ++z) {
@@ -686,12 +693,14 @@ void SDFMap::inflatePoint(const Eigen::Vector3i& pt, int step, vector<Eigen::Vec
       }
 }
 
+//膨胀局部地图
 void SDFMap::clearAndInflateLocalMap()
 {
   /*clear outside local*/
   Eigen::Vector3i min_cut = esdf_min_;
   Eigen::Vector3i max_cut = esdf_max_;
 
+  //限制坐标防止出界
   max_cut = max_cut.array().min((grid_size - Eigen::Vector3i::Ones()).array());
   max_cut = max_cut.array().max(Eigen::Vector3i::Zero().array());
 
@@ -710,6 +719,7 @@ void SDFMap::clearAndInflateLocalMap()
   // std::cout << "min_cut_m =" << min_cut_m << std::endl;
   // std::cout << "max_cut_m =" << max_cut_m << std::endl;
 
+  //计算膨胀索引长度
   int inf_step = ceil(inflate_val_ / resolution);
 
   //  int inf_step = ceil(mp_.obstacles_inflation_ / mp_.resolution_);
@@ -719,39 +729,40 @@ void SDFMap::clearAndInflateLocalMap()
   /* ---------- inflate map ---------- */
   // vector<Eigen::Vector3i> inf_pts;
   // inf_pts.resize(4 * inf_step + 3);
-  vector<Eigen::Vector3i> inf_pts(pow(2 * inf_step + 1, 3));
+  vector<Eigen::Vector3i> inf_pts(pow(2 * inf_step + 1, 3)); //n*n*n
   //inf_pts.resize(6 * inf_step + 3);
   Eigen::Vector3i inf_pt;
 
+  //清除膨胀
   for (int x = esdf_min_(0); x <= esdf_max_(0); ++x)
     for (int y = esdf_min_(1); y <= esdf_max_(1); ++y)
       for (int z = esdf_min_(2); z <= esdf_max_(2); ++z)
       {
         occupancy_buffer_inflate_[x * grid_size(1) * grid_size(2) + y * grid_size(2) + z] = 0;//clamp_min_log_;
       }
-
+  //标记膨胀
   for (int x = esdf_min_(0); x <= esdf_max_(0); ++x)
     for (int y = esdf_min_(1); y <= esdf_max_(1); ++y)
       for (int z = esdf_min_(2); z <= esdf_max_(2); ++z)
       {
-        /* inflate the update map */
+        //需要膨胀的障碍物
         if (occupancy_buffer[x * grid_size(1) * grid_size(2) + y * grid_size(2) + z] > 0)
         {
           std::cout << "x y z = " << x << " " << y << " " << z << std::endl;
           // std::cout << "occupancy_buffer inflate inf_step =" << inf_step << std::endl;
-           #if 1//doghome for ground robot
-           for (int z1 = 0; z1 <= 50; ++z1){
+           #if 1//地面机器人平面地图的处理
+           for (int z1 = 0; z1 <= 50; ++z1){ //简单遍历z 0～50
               //inflatePoint(Eigen::Vector3i(x, y, z1*mp_.resolution_*2), inf_step, inf_pts);
               inflatePoint(Eigen::Vector3i(x, y, z1), inf_step, inf_pts);
               //std::cout << 
               for (int k = 0; k < (int)inf_pts.size(); ++k)
               {
-              
+                  //获取点
                   inf_pt = inf_pts[k];
-
+                  // 计算索引
                   int idx_inf = inf_pt[0] * grid_size(1) * grid_size(2) + inf_pt[1] * grid_size(2) + inf_pt[2];
                   
-                   
+                  //出界检查
                   if (idx_inf < 0 || idx_inf > grid_size(0) * grid_size(1) * grid_size(2))
                   {
                       std::cout << "occupancy_buffer inflate continue k =" << k << "idx_inf =" << idx_inf
@@ -792,16 +803,19 @@ void SDFMap::clearAndInflateLocalMap()
       }
 }
 
+//更新障碍和膨胀
 void SDFMap::updateOccupancyCallback()
 {
   raycastProcess();
   clearAndInflateLocalMap();
 }
 
+//更新esdf
 void SDFMap::updateESDFCallback()
 {
   updateESDF3d();
 }
+//
 void SDFMap::getSliceESDF(const double height, const double res, Eigen::Vector4d range, vector<Eigen::Vector3d>& slice,
                           vector<Eigen::Vector3d>& grad, int sign)
 {
@@ -831,11 +845,13 @@ void SDFMap::checkDist()
       }
 }
 
+//外部调用接口设置障碍物位置
 void SDFMap::addLaserPoints(Eigen::Vector3d pos, int occ)
 {
     setCacheOccupancy(pos, occ);
 }
 
+//外部调用接口，更新地图信息和esdf
 void SDFMap::startUpdateMapInfo()
 {
     updateOccupancyCallback();
