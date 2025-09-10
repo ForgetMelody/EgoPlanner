@@ -17,15 +17,16 @@
 namespace ego_planner
 {
 
+  // 封装 B 样条控制点的相关信息
   class ControlPoints
   {
   public:
     double clearance;
     int size;
-    Eigen::MatrixXd points;
+    Eigen::MatrixXd points;//控制点坐标 (3 x N 矩阵)
     std::vector<std::vector<Eigen::Vector3d>> base_point; // The point at the statrt of the direction vector (collision point)
     std::vector<std::vector<Eigen::Vector3d>> direction;  // Direction vector, must be normalized.
-    std::vector<bool> flag_temp;                          // A flag that used in many places. Initialize it everytime before using it.
+    std::vector<bool> flag_temp;                          // 控制点状态标记 每次使用需要初始化
     // std::vector<bool> occupancy;
 
     void resize(const int size_set)
@@ -53,8 +54,8 @@ namespace ego_planner
     ~BsplineOptimizer() {}
 
     /* main API */
-    void setEnvironment(const shared_ptr<SDFMap> &env);
-    void setParam();
+    void setEnvironment(const shared_ptr<SDFMap> &env); // 传入地图
+    void setParam();//初始化参数
     Eigen::MatrixXd BsplineOptimizeTraj(const Eigen::MatrixXd &points, const double &ts,
                                         const int &cost_function, int max_num_id, int max_time_id);
 
@@ -118,15 +119,15 @@ namespace ego_planner
 
     int a;
     //
-    double dist0_;             // safe distance
+    double dist0_;             // 安全距离
     double max_vel_, max_acc_; // dynamic limits
 
-    int variable_num_;              // optimization variables
-    int iter_num_;                  // iteration of the solver
+    int variable_num_;              // 优化变量数
+    int iter_num_;                  // 迭代次数
     Eigen::VectorXd best_variable_; //
     double min_cost_;               //
 
-    ControlPoints cps_;
+    ControlPoints cps_; // 控制点信息
 
     /* cost function */
     /* calculate each part of cost function with control points q as input */
@@ -134,7 +135,7 @@ namespace ego_planner
     static double costFunction(const std::vector<double> &x, std::vector<double> &grad, void *func_data);
     void combineCost(const std::vector<double> &x, vector<double> &grad, double &cost);
 
-    // q contains all control points
+    // q 包含了所有控制点
     void calcSmoothnessCost(const Eigen::MatrixXd &q, double &cost,
                             Eigen::MatrixXd &gradient, bool falg_use_jerk = true);
     void calcFeasibilityCost(const Eigen::MatrixXd &q, double &cost,
@@ -147,8 +148,8 @@ namespace ego_planner
     static double costFunctionRebound(void *func_data, const double *x, double *grad, const int n);
     static double costFunctionRefine(void *func_data, const double *x, double *grad, const int n);
 
-    bool rebound_optimize();
-    bool refine_optimize();
+    bool rebound_optimize(); //避障优化
+    bool refine_optimize(); // 精细轨迹优化
     void combineCostRebound(const double *x, double *grad, double &f_combine, const int n);
     void combineCostRefine(const double *x, double *grad, double &f_combine, const int n);
 

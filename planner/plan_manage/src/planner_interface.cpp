@@ -135,7 +135,7 @@ namespace ego_planner
         double ts = (start_pt - local_target_pt).norm() > 0.1 ? pp_.ctrl_pt_dist / pp_.max_vel_ * 1.2 : pp_.ctrl_pt_dist / pp_.max_vel_ * 5; 
         // pp_.ctrl_pt_dist / pp_.max_vel_ is too tense, and will surely exceed the acc/vel limits
 
-        // 构造起点和终点加速度限制提供给优化器
+        // 构造起点和终点加速度约束给求解器
         start_end_derivatives.push_back(start_vel);
         start_end_derivatives.push_back(local_target_vel);
         start_end_derivatives.push_back(start_acc);

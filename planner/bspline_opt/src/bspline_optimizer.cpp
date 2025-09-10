@@ -7,25 +7,14 @@ namespace ego_planner
 
   void BsplineOptimizer::setParam()
   {
-    // nh.param("optimization/lambda_smooth", lambda1_, -1.0);
-    // nh.param("optimization/lambda_collision", lambda2_, -1.0);
-    // nh.param("optimization/lambda_feasibility", lambda3_, -1.0);
-    // nh.param("optimization/lambda_fitness", lambda4_, -1.0);
-
-    // nh.param("optimization/dist0", dist0_, -1.0);
-    // nh.param("optimization/max_vel", max_vel_, -1.0);
-    // nh.param("optimization/max_acc", max_acc_, -1.0);
-
-    // nh.param("optimization/order", order_, 3);
-
     lambda1_ = 10.0;
     lambda2_ = 0.5;
     lambda3_ = 0.1;
     lambda4_ = 1.0;
-    dist0_   = 0.5;
-    max_vel_  = 1.0;
-    max_acc_  = 1.0;
-    order_    = 3;
+    dist0_   = 0.5;   // 安全距离
+    max_vel_  = 1.0;  // 最大速度
+    max_acc_  = 1.0;  // 最大加速度
+    order_    = 3;    // b样条阶数
 
   }
 
@@ -44,6 +33,8 @@ namespace ego_planner
   /* This function is very similar to check_collision_and_rebound(). 
    * It was written separately, just because I did it once and it has been running stably since March 2020.
    * But I will merge then someday.*/
+   
+  //初始化控制点(传入B样条的路径）
   std::vector<std::vector<Eigen::Vector3d>> BsplineOptimizer::initControlPoints(Eigen::MatrixXd &init_points, bool flag_first_init /*= true*/)
   {
 
@@ -51,55 +42,59 @@ namespace ego_planner
     {
       cps_.clearance = dist0_;
       cps_.resize(init_points.cols());
-      cps_.points = init_points;
+      cps_.points = init_points; //传入控制点
     }
 
-    /*** Segment the initial trajectory according to obstacles ***/
+    /*** 根据障碍物给初始轨迹分段 ***/
     constexpr int ENOUGH_INTERVAL = 2;
+    // 计算步长 分辨率 / (首尾路径点距离/路径点数量) / 2
     double step_size = grid_map_->getResolution() / ((init_points.col(0) - init_points.rightCols(1)).norm() / (init_points.cols() - 1)) / 2;
     int in_id, out_id;
-    vector<std::pair<int, int>> segment_ids;
-    int same_occ_state_times = ENOUGH_INTERVAL + 1;
-    bool occ, last_occ = false;
-    bool flag_got_start = false, flag_got_end = false, flag_got_end_maybe = false;
-    int i_end = (int)init_points.cols() - order_ - ((int)init_points.cols() - 2 * order_) / 3; // only check closed 2/3 points.
-    for (int i = order_; i <= i_end; ++i)
+    vector<std::pair<int, int>> segment_ids; //存储分段索引
+    int same_occ_state_times = ENOUGH_INTERVAL + 1; // 检测是不是同一个障碍物的状态计数器
+    bool occ, last_occ = false; //是否是障碍物点，上次是否是障碍物点
+    bool flag_got_start = false, flag_got_end = false, flag_got_end_maybe = false; //标志位，是否找到起点，终点，终点可能
+    int i_end = (int)init_points.cols() - order_ - ((int)init_points.cols() - 2 * order_) / 3; // 只检查前面约 2/3 的点 
+    for (int i = order_; i <= i_end; ++i) //遍历
     {
-      for (double a = 1.0; a >= 0.0; a -= step_size)
+      for (double a = 1.0; a >= 0.0; a -= step_size) //
       {
+        // 插值迭代控制点连线
         occ = grid_map_->getInflateOccupancy(a * init_points.col(i - 1) + (1 - a) * init_points.col(i));
         // cout << setprecision(5);
         // cout << (a * init_points.col(i-1) + (1-a) * init_points.col(i)).transpose() << " occ1=" << occ << endl;
 
-        if (occ && !last_occ)
+        //查找分段的头部和尾部
+        if (occ && !last_occ) // 进入障碍物 
         {
           if (same_occ_state_times > ENOUGH_INTERVAL || i == order_)
           {
-            in_id = i - 1;
+            in_id = i - 1;//标记分段开始索引
             flag_got_start = true;
           }
-          same_occ_state_times = 0;
+          same_occ_state_times = 0; //重制计数器
           flag_got_end_maybe = false; // terminate in advance
         }
-        else if (!occ && last_occ)
+        else if (!occ && last_occ) // 离开障碍物
         {
-          out_id = i;
+          out_id = i; //标记分段结束索引
           flag_got_end_maybe = true;
           same_occ_state_times = 0;
         }
-        else
+        else //连续同障碍物索引状态 （连续为空闲 或连续为占用）
         {
           ++same_occ_state_times;
         }
 
-        if (flag_got_end_maybe && (same_occ_state_times > ENOUGH_INTERVAL || (i == (int)init_points.cols() - order_)))
+        // 可能结尾状态时检查到了最后的控制点
+        if (flag_got_end_maybe && (same_occ_state_times > ENOUGH_INTERVAL || (i == (int)init_points.cols() - order_))) // 这部分不会触发，因为i_end 已经限制了检查范围
         {
           flag_got_end_maybe = false;
           flag_got_end = true;
         }
 
-        last_occ = occ;
-
+        last_occ = occ; //更新上次状态
+        //同时存在段尾和段头，记录当前分段
         if (flag_got_start && flag_got_end)
         {
           flag_got_start = false;
@@ -110,6 +105,7 @@ namespace ego_planner
     }
 
     /*** a star search ***/
+    // 对找到障碍物的分段执行A*搜索获得局部路径
     vector<vector<Eigen::Vector3d>> a_star_pathes;
     for (size_t i = 0; i < segment_ids.size(); ++i)
     {
@@ -126,28 +122,31 @@ namespace ego_planner
       }
     }
 
-    /*** calculate bounds ***/
+    /*** 控制点边界计算 ***/
     int id_low_bound, id_up_bound;
     vector<std::pair<int, int>> bounds(segment_ids.size());
     for (size_t i = 0; i < segment_ids.size(); i++)
     {
 
-      if (i == 0) // first segment
+      if (i == 0) // 第一个分段
       {
-        id_low_bound = order_;
-        if (segment_ids.size() > 1)
+        id_low_bound = order_; // 定为首个控制点
+        if (segment_ids.size() > 1) // 不止一段
         {
+          // 将边界设置在当前分段结尾和下一分段开始之间间隔的中间控制点
+          // +-1.0f 用于修正部分计算问题？
           id_up_bound = (int)(((segment_ids[0].second + segment_ids[1].first) - 1.0f) / 2); // id_up_bound : -1.0f fix()
         }
         else
         {
+          // 只有一段 设置为最后一个控制点
           id_up_bound = init_points.cols() - order_ - 1;
         }
       }
-      else if (i == segment_ids.size() - 1) // last segment, i != 0 here
+      else if (i == segment_ids.size() - 1) // 最后一个分段
       {
-        id_low_bound = (int)(((segment_ids[i].first + segment_ids[i - 1].second) + 1.0f) / 2); // id_low_bound : +1.0f ceil()
-        id_up_bound = init_points.cols() - order_ - 1;
+        id_low_bound = (int)(((segment_ids[i].first + segment_ids[i - 1].second) + 1.0f) / 2); // 与上一段结尾点间隔的中间点
+        id_up_bound = init_points.cols() - order_ - 1; //设为最后一个控制点
       }
       else
       {
@@ -155,7 +154,7 @@ namespace ego_planner
         id_up_bound = (int)(((segment_ids[i].second + segment_ids[i + 1].first) - 1.0f) / 2);  // id_up_bound : -1.0f fix()
       }
 
-      bounds[i] = std::pair<int, int>(id_low_bound, id_up_bound);
+      bounds[i] = std::pair<int, int>(id_low_bound, id_up_bound); //存入bounds
     }
 
     // cout << "+++++++++" << endl;
@@ -165,13 +164,14 @@ namespace ego_planner
     // }
 
     /*** Adjust segment length ***/
+    //按照点的数量调整分段长度 由于 MINIMUM_PERCENT = 0.0;这部分没有效果
     vector<std::pair<int, int>> final_segment_ids(segment_ids.size());
-    constexpr double MINIMUM_PERCENT = 0.0; // Each segment is guaranteed to have sufficient points to generate sufficient thrust
-    int minimum_points = round(init_points.cols() * MINIMUM_PERCENT), num_points;
+    constexpr double MINIMUM_PERCENT = 0.0; // Each segment is guaranteed to have sufficient points to generate sufficient thrust 保证每个部分都有足够的点来产生足够的推力 最小点数百分比 此处没有用
+    int minimum_points = round(init_points.cols() * MINIMUM_PERCENT), num_points; //最小点数量
     for (size_t i = 0; i < segment_ids.size(); i++)
     {
       /*** Adjust segment length ***/
-      num_points = segment_ids[i].second - segment_ids[i].first + 1;
+      num_points = segment_ids[i].second - segment_ids[i].first + 1; //控制点数量
       //cout << "i = " << i << " first = " << segment_ids[i].first << " second = " << segment_ids[i].second << endl;
       if (num_points < minimum_points)
       {
@@ -181,7 +181,7 @@ namespace ego_planner
 
         final_segment_ids[i].second = segment_ids[i].second + add_points_each_side <= bounds[i].second ? segment_ids[i].second + add_points_each_side : bounds[i].second;
       }
-      else
+      else //复制到final_segment_ids
       {
         final_segment_ids[i].first = segment_ids[i].first;
         final_segment_ids[i].second = segment_ids[i].second;
@@ -191,23 +191,29 @@ namespace ego_planner
     }
 
     /*** Assign data to each segment ***/
+    // 给每个分段分配数据
     for (size_t i = 0; i < segment_ids.size(); i++)
     {
-      // step 1
+      // 第一步 将分段内控制点初始化为未标记
       for (int j = final_segment_ids[i].first; j <= final_segment_ids[i].second; ++j)
-        cps_.flag_temp[j] = false;
+        cps_.flag_temp[j] = false; // 标记为未使用
 
-      // step 2
+      // 第二步 寻找控制点与A*路径的交点
       int got_intersection_id = -1;
       for (int j = segment_ids[i].first + 1; j < segment_ids[i].second; ++j)
       {
+        // 控制点运动方向
         Eigen::Vector3d ctrl_pts_law(cps_.points.col(j + 1) - cps_.points.col(j - 1)), intersection_point;
+        //Astart_id 标记为中间点的索引
+        //注释为选择最远的A*点会更好，但是需要更多的计算量
         int Astar_id = a_star_pathes[i].size() / 2, last_Astar_id; // Let "Astar_id = id_of_the_most_far_away_Astar_point" will be better, but it needs more computation
+        //叉积 用于在符号变化时检测交点
         double val = (a_star_pathes[i][Astar_id] - cps_.points.col(j)).dot(ctrl_pts_law), last_val = val;
-        while (Astar_id >= 0 && Astar_id < (int)a_star_pathes[i].size())
+        while (Astar_id >= 0 && Astar_id < (int)a_star_pathes[i].size()) //迭代A*路径
         {
           last_Astar_id = Astar_id;
 
+          //
           if (val >= 0)
             --Astar_id;
           else
@@ -215,7 +221,7 @@ namespace ego_planner
 
           val = (a_star_pathes[i][Astar_id] - cps_.points.col(j)).dot(ctrl_pts_law);
 
-          if (val * last_val <= 0 && (abs(val) > 0 || abs(last_val) > 0)) // val = last_val = 0.0 is not allowed
+          if (val * last_val <= 0 && (abs(val) > 0 || abs(last_val) > 0)) // val = last_val = 0.0 is not allowed 排除垂直夹角的情况
           {
             intersection_point =
                 a_star_pathes[i][Astar_id] +

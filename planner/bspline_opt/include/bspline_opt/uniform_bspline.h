@@ -22,9 +22,9 @@ namespace ego_planner
 
     int p_; // B样条曲线的阶数（degree）
     int n_; // 控制点的数量（n+1）
-    int m_; // 结点数量（m = n+p+1）
-    Eigen::VectorXd u_; // 结点向量（knots vector）
-    double interval_;   // 结点间隔（knot span \delta t）
+    int m_;  
+    Eigen::VectorXd u_; // 节点向量（knots vector）
+    double interval_;   // 节点间隔（knot span \delta t）
 
     // 计算B样条曲线的导数控制点
     Eigen::MatrixXd getDerivativeControlPoints();

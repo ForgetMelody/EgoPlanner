@@ -13,8 +13,10 @@ constexpr double inf = 1 >> 20;
 struct GridNode;
 typedef GridNode *GridNodePtr;
 
+//定义 A* 算法的节点
 struct GridNode
 {
+	// 状态
 	enum enum_state
 	{
 		OPENSET = 1,
@@ -29,11 +31,11 @@ struct GridNode
 	};
 	Eigen::Vector3i index;
 
-	double gScore{inf}, fScore{inf};
-	GridNodePtr cameFrom{NULL};
+	double gScore{inf}, fScore{inf};//g f 代价
+	GridNodePtr cameFrom{NULL}; // 父节点
 };
 
-class NodeComparator
+class NodeComparator //重载用于比较评分
 {
 public:
 	bool operator()(GridNodePtr node1, GridNodePtr node2)
@@ -50,10 +52,10 @@ private:
 
 	inline void coord2gridIndexFast(const double x, const double y, const double z, int &id_x, int &id_y, int &id_z);
 
-	double getDiagHeu(GridNodePtr node1, GridNodePtr node2);
-	double getManhHeu(GridNodePtr node1, GridNodePtr node2);
-	double getEuclHeu(GridNodePtr node1, GridNodePtr node2);
-	inline double getHeu(GridNodePtr node1, GridNodePtr node2);
+	double getDiagHeu(GridNodePtr node1, GridNodePtr node2); // 计算斜角距离
+	double getManhHeu(GridNodePtr node1, GridNodePtr node2); // 计算曼哈顿距离
+	double getEuclHeu(GridNodePtr node1, GridNodePtr node2); // 计算欧式距离
+	inline double getHeu(GridNodePtr node1, GridNodePtr node2); // 计算启发函数
 
 	bool ConvertToIndexAndAdjustStartEndPoints(const Eigen::Vector3d start_pt, const Eigen::Vector3d end_pt, Eigen::Vector3i &start_idx, Eigen::Vector3i &end_idx);
 
