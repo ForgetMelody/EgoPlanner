@@ -34,7 +34,7 @@ namespace ego_planner
    * It was written separately, just because I did it once and it has been running stably since March 2020.
    * But I will merge then someday.*/
    
-  //初始化控制点(传入B样条的路径）
+  //初始化控制点(传入B样条的控制点）
   std::vector<std::vector<Eigen::Vector3d>> BsplineOptimizer::initControlPoints(Eigen::MatrixXd &init_points, bool flag_first_init /*= true*/)
   {
 
@@ -67,7 +67,7 @@ namespace ego_planner
         //查找分段的头部和尾部
         if (occ && !last_occ) // 进入障碍物 
         {
-          if (same_occ_state_times > ENOUGH_INTERVAL || i == order_)
+          if (same_occ_state_times > ENOUGH_INTERVAL || i == order_)//开始位置或者具备足够的间隔
           {
             in_id = i - 1;//标记分段开始索引
             flag_got_start = true;
@@ -94,7 +94,7 @@ namespace ego_planner
         }
 
         last_occ = occ; //更新上次状态
-        //同时存在段尾和段头，记录当前分段
+        //找到段尾和段头，记录当前分段
         if (flag_got_start && flag_got_end)
         {
           flag_got_start = false;
@@ -192,15 +192,14 @@ namespace ego_planner
 
     /*** Assign data to each segment ***/
     // 给每个分段分配数据
-    for (size_t i = 0; i < segment_ids.size(); i++)
+    for (size_t i = 0; i < segment_ids.size(); i++)//遍历每个分段
     {
       // 第一步 将分段内控制点初始化为未标记
       for (int j = final_segment_ids[i].first; j <= final_segment_ids[i].second; ++j)
         cps_.flag_temp[j] = false; // 标记为未使用
 
-      // 第二步 寻找控制点与A*路径的交点
-      int got_intersection_id = -1;
-      for (int j = segment_ids[i].first + 1; j < segment_ids[i].second; ++j)
+      int got_intersection_id = -1; //j 对应的插值点索引
+      for (int j = segment_ids[i].first + 1; j < segment_ids[i].second; ++j) //遍历除了端点以外的控制点 （这里没有处理没有中间控制点的情况，在后续处理）
       {
         // 控制点运动方向
         Eigen::Vector3d ctrl_pts_law(cps_.points.col(j + 1) - cps_.points.col(j - 1)), intersection_point;
@@ -208,12 +207,12 @@ namespace ego_planner
         //注释为选择最远的A*点会更好，但是需要更多的计算量
         int Astar_id = a_star_pathes[i].size() / 2, last_Astar_id; // Let "Astar_id = id_of_the_most_far_away_Astar_point" will be better, but it needs more computation
         //叉积 用于在符号变化时检测交点
-        double val = (a_star_pathes[i][Astar_id] - cps_.points.col(j)).dot(ctrl_pts_law), last_val = val;
+        double val = (a_star_pathes[i][Astar_id] - cps_.points.col(j)).dot(ctrl_pts_law), last_val = val; //A*点相对于ctrl_pts_law方向的投影值
         while (Astar_id >= 0 && Astar_id < (int)a_star_pathes[i].size()) //迭代A*路径
         {
           last_Astar_id = Astar_id;
 
-          //
+          //沿着
           if (val >= 0)
             --Astar_id;
           else
@@ -221,35 +220,43 @@ namespace ego_planner
 
           val = (a_star_pathes[i][Astar_id] - cps_.points.col(j)).dot(ctrl_pts_law);
 
+          // 当投影方向发生变化时，即默认此时A*上点Astar_id点 从进程上对应着原控制点
           if (val * last_val <= 0 && (abs(val) > 0 || abs(last_val) > 0)) // val = last_val = 0.0 is not allowed 排除垂直夹角的情况
           {
+            //使用线形插值计算插值点
             intersection_point =
                 a_star_pathes[i][Astar_id] +
-                ((a_star_pathes[i][Astar_id] - a_star_pathes[i][last_Astar_id]) *
-                 (ctrl_pts_law.dot(cps_.points.col(j) - a_star_pathes[i][Astar_id]) / ctrl_pts_law.dot(a_star_pathes[i][Astar_id] - a_star_pathes[i][last_Astar_id])) // = t
+                ((a_star_pathes[i][Astar_id] - a_star_pathes[i][last_Astar_id]) * //A*段方向
+                  (
+                    ctrl_pts_law.dot(cps_.points.col(j) - a_star_pathes[i][Astar_id]) //相邻控制点的运动向量在(接近垂直方向上的)投影长度
+                    / 
+                    ctrl_pts_law.dot(a_star_pathes[i][Astar_id] - a_star_pathes[i][last_Astar_id]) // A*段方向的投影长度
+                  ) // = t
                 );
 
             //cout << "i=" << i << " j=" << j << " Astar_id=" << Astar_id << " last_Astar_id=" << last_Astar_id << " intersection_point = " << intersection_point.transpose() << endl;
 
-            got_intersection_id = j;
+            got_intersection_id = j; //记录插值点对应的控制点索引
             break;
           }
         }
 
+        //如果存在插值点
         if (got_intersection_id >= 0)
         {
-          cps_.flag_temp[j] = true;
-          double length = (intersection_point - cps_.points.col(j)).norm();
-          if (length > 1e-5)
+          cps_.flag_temp[j] = true; //对应的控制点标记为已修改
+          double length = (intersection_point - cps_.points.col(j)).norm(); //插值点到原控制点的距离
+          if (length > 1e-5) //排除过近的情况
           {
             for (double a = length; a >= 0.0; a -= grid_map_->getResolution())
             {
-              occ = grid_map_->getInflateOccupancy((a / length) * intersection_point + (1 - a / length) * cps_.points.col(j));
+              occ = grid_map_->getInflateOccupancy((a / length) * intersection_point + (1 - a / length) * cps_.points.col(j)); //在原点和插值点连线上线形插值并判断障碍物情况 //由插值点向原点方向插值
 
-              if (occ || a < grid_map_->getResolution())
+              if (occ || a < grid_map_->getResolution()) // 障碍物或过近
               {
                 if (occ)
-                  a += grid_map_->getResolution();
+                  a += grid_map_->getResolution(); //取上一次的位置
+                //将确定的点保存
                 cps_.base_point[j].push_back((a / length) * intersection_point + (1 - a / length) * cps_.points.col(j));
                 cps_.direction[j].push_back((intersection_point - cps_.points.col(j)).normalized());
                 break;
@@ -260,10 +267,12 @@ namespace ego_planner
       }
 
       /* Corner case: the segment length is too short. Here the control points may outside the A* path, leading to opposite gradient direction. So I have to take special care of it */
+      //如果该分段没有中间控制点
+      //取一个中点middle_point进行构造和插值（计算大致与上面相同）
       if (segment_ids[i].second - segment_ids[i].first == 1)
       {
-        Eigen::Vector3d ctrl_pts_law(cps_.points.col(segment_ids[i].second) - cps_.points.col(segment_ids[i].first)), intersection_point;
-        Eigen::Vector3d middle_point = (cps_.points.col(segment_ids[i].second) + cps_.points.col(segment_ids[i].first)) / 2;
+        Eigen::Vector3d ctrl_pts_law(cps_.points.col(segment_ids[i].second) - cps_.points.col(segment_ids[i].first)), intersection_point;//计算运动方向
+        Eigen::Vector3d middle_point = (cps_.points.col(segment_ids[i].second) + cps_.points.col(segment_ids[i].first)) / 2; //取中间点
         int Astar_id = a_star_pathes[i].size() / 2, last_Astar_id; // Let "Astar_id = id_of_the_most_far_away_Astar_point" will be better, but it needs more computation
         double val = (a_star_pathes[i][Astar_id] - middle_point).dot(ctrl_pts_law), last_val = val;
         while (Astar_id >= 0 && Astar_id < (int)a_star_pathes[i].size())
@@ -291,7 +300,7 @@ namespace ego_planner
               cps_.base_point[segment_ids[i].first].push_back(cps_.points.col(segment_ids[i].first));
               cps_.direction[segment_ids[i].first].push_back((intersection_point - middle_point).normalized());
 
-              got_intersection_id = segment_ids[i].first;
+              got_intersection_id = segment_ids[i].first; //插值点id标记为分段的第一个点
             }
             break;
           }
@@ -333,6 +342,7 @@ namespace ego_planner
     return (opt->force_stop_type_ == STOP_FOR_ERROR || opt->force_stop_type_ == STOP_FOR_REBOUND);
   }
 
+  // 包装函数，用于传入lbfgs
   double BsplineOptimizer::costFunctionRebound(void *func_data, const double *x, double *grad, const int n)
   {
     BsplineOptimizer *opt = reinterpret_cast<BsplineOptimizer *>(func_data);
@@ -344,6 +354,7 @@ namespace ego_planner
     return cost;
   }
 
+  // 包装函数，用于传入lbfgs
   double BsplineOptimizer::costFunctionRefine(void *func_data, const double *x, double *grad, const int n)
   {
     BsplineOptimizer *opt = reinterpret_cast<BsplineOptimizer *>(func_data);
@@ -355,15 +366,19 @@ namespace ego_planner
     return cost;
   }
 
+  //计算 障碍物距离代价和梯度
   void BsplineOptimizer::calcDistanceCostRebound(const Eigen::MatrixXd &q, double &cost,
                                                  Eigen::MatrixXd &gradient, int iter_num, double smoothness_cost)
   {
     cost = 0.0;
     int end_idx = q.cols() - order_;
-    double demarcation = cps_.clearance;
-    double a = 3 * demarcation, b = -3 * pow(demarcation, 2), c = pow(demarcation, 3);
+    double demarcation = cps_.clearance; //安全距离
+    double  a = 3 * demarcation, 
+            b = -3 * pow(demarcation, 2), 
+            c = pow(demarcation, 3);
 
     force_stop_type_ = DONT_STOP;
+    //确保足够平滑？
     if (iter_num > 3 && smoothness_cost / (cps_.size - 2 * order_) < 0.1) // 0.1 is an experimental value that indicates the trajectory is smooth enough.
     {
       check_collision_and_rebound();
@@ -426,23 +441,26 @@ namespace ego_planner
     }
   }
 
+  //计算平滑代价和梯度
   void BsplineOptimizer::calcSmoothnessCost(const Eigen::MatrixXd &q, double &cost,
                                             Eigen::MatrixXd &gradient, bool falg_use_jerk /* = true*/)
   {
 
     cost = 0.0;
 
-    if (falg_use_jerk)
+    if (falg_use_jerk) //使用加加速度
     {
       Eigen::Vector3d jerk, temp_j;
 
-      for (int i = 0; i < q.cols() - 3; i++)
+      for (int i = 0; i < q.cols() - 3; i++) // -3避免滑窗出界
       {
         /* evaluate jerk */
-        jerk = q.col(i + 3) - 3 * q.col(i + 2) + 3 * q.col(i + 1) - q.col(i);
-        cost += jerk.squaredNorm();
+        //计算加加速度
+        jerk = q.col(i + 3) - 3 * q.col(i + 2) + 3 * q.col(i + 1) - q.col(i); //
+        cost += jerk.squaredNorm(); // 加加速度的平方和作为代价
         temp_j = 2.0 * jerk;
         /* jerk gradient */
+        //更新梯度
         gradient.col(i + 0) += -temp_j;
         gradient.col(i + 1) += 3.0 * temp_j;
         gradient.col(i + 2) += -3.0 * temp_j;
@@ -453,13 +471,14 @@ namespace ego_planner
     {
       Eigen::Vector3d acc, temp_acc;
 
-      for (int i = 0; i < q.cols() - 2; i++)
+      for (int i = 0; i < q.cols() - 2; i++) // -2 避免滑窗出界
       {
         /* evaluate acc */
         acc = q.col(i + 2) - 2 * q.col(i + 1) + q.col(i);
         cost += acc.squaredNorm();
         temp_acc = 2.0 * acc;
         /* acc gradient */
+        //更新梯度
         gradient.col(i + 0) += temp_acc;
         gradient.col(i + 1) += -2.0 * temp_acc;
         gradient.col(i + 2) += temp_acc;
@@ -987,16 +1006,23 @@ namespace ego_planner
     return success;
   }
 
+  //执行优化
   bool BsplineOptimizer::refine_optimize()
   {
+    //记录迭代次数
     iter_num_ = 0;
+    //设置范围（起始点，终止点）
     int start_id = order_;
     int end_id = this->cps_.points.cols() - order_;
+    //变量数
+    //3 * 点的个数（每个点3个double
     variable_num_ = 3 * (end_id - start_id);
 
+    // 申请空间
     double q[variable_num_];
-    double final_cost;
+    double final_cost; //记录最终代价
 
+    //复制数据到q中
     memcpy(q, cps_.points.data() + 3 * start_id, variable_num_ * sizeof(q[0]));
 
     double origin_lambda4 = lambda4_;
@@ -1004,13 +1030,15 @@ namespace ego_planner
     int iter_count = 0;
     do
     {
+      //初始化lbfgs参数
       lbfgs::lbfgs_parameter_t lbfgs_params;
       lbfgs::lbfgs_load_default_parameters(&lbfgs_params);
       lbfgs_params.mem_size = 16;
       lbfgs_params.max_iterations = 200;
       lbfgs_params.g_epsilon = 0.001;
-
+      //传入变量和代价函数执行优化
       int result = lbfgs::lbfgs_optimize(variable_num_, q, &final_cost, BsplineOptimizer::costFunctionRefine, NULL, NULL, this, &lbfgs_params);
+      //正常结束优化
       if (result == lbfgs::LBFGS_CONVERGENCE ||
           result == lbfgs::LBFGSERR_MAXIMUMITERATION ||
           result == lbfgs::LBFGS_ALREADY_MINIMIZED ||
@@ -1023,16 +1051,18 @@ namespace ego_planner
         printf("Solver error in refining!, return = %d, %s", result, lbfgs::lbfgs_strerror(result));
       }
 
+      //对优化完的控制点构造曲线检查
       UniformBspline traj = UniformBspline(cps_.points, 3, bspline_interval_);
+      //
       double tm, tmp;
       traj.getTimeSpan(tm, tmp);
       double t_step = (tmp - tm) / ((traj.evaluateDeBoorT(tmp) - traj.evaluateDeBoorT(tm)).norm() / grid_map_->getResolution()); // Step size is defined as the maximum size that can passes throgth every gird.
       for (double t = tm; t < tmp * 2 / 3; t += t_step)
       {
+        //如果碰到障碍物，则返回失败
         if (grid_map_->getInflateOccupancy(traj.evaluateDeBoorT(t)))
         {
           // cout << "Refined traj hit_obs, t=" << t << " P=" << traj.evaluateDeBoorT(t).transpose() << endl;
-
           Eigen::MatrixXd ref_pts(ref_pts_.size(), 3);
           for (size_t i = 0; i < ref_pts_.size(); i++)
           {
@@ -1057,10 +1087,11 @@ namespace ego_planner
     return flag_safe;
   }
 
+  // 合并代价函数1: 
   void BsplineOptimizer::combineCostRebound(const double *x, double *grad, double &f_combine, const int n)
   {
 
-    memcpy(cps_.points.data() + 3 * order_, x, n * sizeof(x[0]));
+    memcpy(cps_.points.data() + 3 * order_, x, n * sizeof(x[0])); //复制数据
 
     /* ---------- evaluate cost and gradient ---------- */
     double f_smoothness, f_distance, f_feasibility;
@@ -1069,8 +1100,11 @@ namespace ego_planner
     Eigen::MatrixXd g_distance = Eigen::MatrixXd::Zero(3, cps_.size);
     Eigen::MatrixXd g_feasibility = Eigen::MatrixXd::Zero(3, cps_.size);
 
+    // 平滑代价
     calcSmoothnessCost(cps_.points, f_smoothness, g_smoothness);
+    // 障碍物距离代价
     calcDistanceCostRebound(cps_.points, f_distance, g_distance, iter_num_, f_smoothness);
+    // 运动学可行性代价
     calcFeasibilityCost(cps_.points, f_feasibility, g_feasibility);
 
     f_combine = lambda1_ * f_smoothness + new_lambda2_ * f_distance + lambda3_ * f_feasibility;
@@ -1080,6 +1114,7 @@ namespace ego_planner
     memcpy(grad, grad_3D.data() + 3 * order_, n * sizeof(grad[0]));
   }
 
+  // 合并代价函数2: 
   void BsplineOptimizer::combineCostRefine(const double *x, double *grad, double &f_combine, const int n)
   {
 
@@ -1094,8 +1129,11 @@ namespace ego_planner
 
     //time_satrt = ros::Time::now();
 
+    // 平滑代价
     calcSmoothnessCost(cps_.points, f_smoothness, g_smoothness);
+    // 
     calcFitnessCost(cps_.points, f_fitness, g_fitness);
+    // 运动学可行性代价
     calcFeasibilityCost(cps_.points, f_feasibility, g_feasibility);
 
     /* ---------- convert to solver format...---------- */

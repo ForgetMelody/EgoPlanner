@@ -5,7 +5,6 @@
 #include <path_searching/dyn_a_star.h>
 #include <bspline_opt/uniform_bspline.h>
 #include <plan_env/sdf_map.h>
-// #include <ros/ros.h>
 #include "bspline_opt/lbfgs.hpp"
 #include<memory>
 
@@ -24,8 +23,8 @@ namespace ego_planner
     double clearance;
     int size;
     Eigen::MatrixXd points;//控制点坐标 (3 x N 矩阵)
-    std::vector<std::vector<Eigen::Vector3d>> base_point; // The point at the statrt of the direction vector (collision point)
-    std::vector<std::vector<Eigen::Vector3d>> direction;  // Direction vector, must be normalized.
+    std::vector<std::vector<Eigen::Vector3d>> base_point; // 需要优化的点（障碍中的控制点） (collision point)
+    std::vector<std::vector<Eigen::Vector3d>> direction;  // 控制点到插值点的方向向量
     std::vector<bool> flag_temp;                          // 控制点状态标记 每次使用需要初始化
     // std::vector<bool> occupancy;
 
